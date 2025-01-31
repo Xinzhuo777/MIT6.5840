@@ -1,10 +1,20 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+// import "fmt"
+// import "log"
+// import "net/rpc"
+// import "hash/fnv"
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -13,6 +23,11 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+type ByKey []KeyValue
+
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -32,10 +47,135 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-
+    for {
+        task := requestTask()
+        
+        switch task.TaskType {
+        case MapTask:
+            doMap(task, mapf)
+        case ReduceTask:
+            doReduce(task, reducef)
+        case WaitTask:
+            time.Sleep(time.Second)
+            continue
+        case ExitTask:
+            return
+        }
+    }
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+}
+
+
+func doMap(task TaskResponse, mapf func(string, string) []KeyValue) {
+    filename := task.InputFiles[0]
+    file, err := os.Open(filename)
+    if err != nil {
+        log.Fatalf("cannot open %v", filename)
+    }
+    content, err := ioutil.ReadAll(file)
+    if err != nil {
+        log.Fatalf("cannot read %v", filename)
+    }
+    file.Close()
+
+    kva := mapf(filename, string(content))
+    
+    // Create intermediate files
+    intermediates := make([][]KeyValue, task.NReduce)
+    for _, kv := range kva {
+        bucket := ihash(kv.Key) % task.NReduce
+        intermediates[bucket] = append(intermediates[bucket], kv)
+    }
+
+    // Write to intermediate files
+    for i := 0; i < task.NReduce; i++ {
+        oname := fmt.Sprintf("mr-%d-%d", task.TaskID, i)
+        tempFile, err := ioutil.TempFile("", "mr-tmp-*")
+        if err != nil {
+            log.Fatal("cannot create temp file", err)
+        }
+
+        enc := json.NewEncoder(tempFile)
+        for _, kv := range intermediates[i] {
+            err := enc.Encode(&kv)
+            if err != nil {
+                log.Fatal("cannot encode", err)
+            }
+        }
+        tempFile.Close()
+        os.Rename(tempFile.Name(), oname)
+    }
+
+    reportTask(ReportRequest{TaskType: MapTask, TaskID: task.TaskID})
+}
+
+func doReduce(task TaskResponse, reducef func(string, []string) string) {
+    intermediate := []KeyValue{}
+    
+    // Read all intermediate files for this reduce task
+    for i := 0; i < task.NReduce; i++ {
+        filename := fmt.Sprintf("mr-%d-%d", i, task.ReduceID)
+        file, err := os.Open(filename)
+        if err != nil {
+            continue
+        }
+        dec := json.NewDecoder(file)
+        for {
+            var kv KeyValue
+            if err := dec.Decode(&kv); err != nil {
+                break
+            }
+            intermediate = append(intermediate, kv)
+        }
+        file.Close()
+    }
+
+    sort.Sort(ByKey(intermediate))
+
+    // Create output file
+    oname := fmt.Sprintf("mr-out-%d", task.ReduceID)
+    tempFile, err := ioutil.TempFile("", "mr-out-tmp-*")
+    if err != nil {
+        log.Fatal("cannot create temp file", err)
+    }
+
+    // Process each key group
+    i := 0
+    for i < len(intermediate) {
+        j := i + 1
+        for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+            j++
+        }
+        values := []string{}
+        for k := i; k < j; k++ {
+            values = append(values, intermediate[k].Value)
+        }
+        output := reducef(intermediate[i].Key, values)
+        fmt.Fprintf(tempFile, "%s %s\n", intermediate[i].Key, output)
+        i = j
+    }
+
+    tempFile.Close()
+    os.Rename(tempFile.Name(), oname)
+    
+    reportTask(ReportRequest{TaskType: ReduceTask, TaskID: task.ReduceID})
+}
+
+func requestTask() TaskResponse {
+    args := TaskRequest{}
+    reply := TaskResponse{}
+    ok := call("Coordinator.RequestTask", &args, &reply)
+    if !ok {
+        os.Exit(0)
+    }
+    return reply
+}
+
+func reportTask(args ReportRequest) {
+    reply := ReportResponse{}
+    call("Coordinator.ReportTask", &args, &reply)
 }
 
 //
