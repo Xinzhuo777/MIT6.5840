@@ -25,41 +25,40 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-type TaskType int
-
+type TaskType int // 核心状态机建模
 const (
-	MapTask TaskType = iota
-	ReduceTask
-	WaitTask
-	ExitTask
+	MapTask    = iota // 0 值，标识基础状态
+	ReduceTask        // 保持与MapTask的严格顺序关系
+	WaitTask          // 非最终状态，实现阻塞式回退
+	ExitTask          // 终止状态控制
 )
 
-type TaskState int
-
+type TaskState int // 微观任务状态机
 const (
-	Idle TaskState = iota
-	InProgress
-	Completed
+	Idle       = iota // 初始可分配状态
+	InProgress        // 原子性保证关键状态
+	Completed         // 终态防重复处理
 )
 
-type TaskRequest struct {
-}
+// 任务请求协议（空结构体实现最小通信开销）
+type TaskRequest struct{} // Zero-byte 优化设计
 
+// 任务响应协议（完备参数传递）
 type TaskResponse struct {
-	TaskType   TaskType
-	TaskID     int
-	InputFiles []string
-	ReduceID   int
-	NReduce    int
+	TaskType   TaskType // 主控制信号
+	TaskID     int      // 全局唯一标识
+	InputFiles []string // 数据局部性保证
+	ReduceID   int      // Reduce阶段分片标识
+	NReduce    int      // 跨阶段参数传递
 }
 
 type ReportRequest struct {
-	TaskType TaskType
-	TaskID   int
+	TaskType TaskType // 精确状态分类报告
+	TaskID   int      // 精确任务定位
 }
 
 type ReportResponse struct {
-	Success bool
+	Success bool // 原子确认信号
 }
 
 // Cook up a unique-ish UNIX-domain socket name

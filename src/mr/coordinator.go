@@ -11,35 +11,34 @@ import (
 )
 
 type Task struct {
-	Type      TaskType
-	ID        int
-	Files     []string
-	StartTime time.Time
-	State     TaskState
+	Type      TaskType  // 任务类型(Map/Reduce)
+	ID        int       // 任务ID
+	Files     []string  // 输入文件列表
+	StartTime time.Time // 开始时间(用于超时检测)
+	State     TaskState // 任务状态(Idle/InProgress/Completed)
 }
 
 type Coordinator struct {
-	// Your definitions here.
-	mu          sync.Mutex
-	mapTasks    []Task
-	reduceTasks []Task
-	nReduce     int
-	phase       TaskType
-	nMap        int
+	mu          sync.Mutex // 互斥锁保护并发访问
+	mapTasks    []Task     // Map任务队列
+	reduceTasks []Task     // Reduce任务队列
+	nReduce     int        // Reduce任务数量
+	phase       TaskType   // 当前阶段(Map/Reduce)
+	nMap        int        // Map任务数量
 }
 
 // Your code here -- RPC handlers for the worker to call.
 func (c *Coordinator) RequestTask(args *TaskRequest, reply *TaskResponse) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.Lock()         //这行代码获取互斥锁。mu是sync.Mutex类型,它提供了最基本的互斥机制。当一个goroutine获取了锁,其他goroutine就必须等待直到锁被释放。
+	defer c.mu.Unlock() //这行代码使用了Go的defer机制,它会在函数返回前执行解锁操作。通过defer机制,确保无论函数如何返回(正常返回、panic等),锁都会被释放。这避免了死锁的可能性。
 
 	// Check for timeouts
 	now := time.Now()
 	if c.phase == MapTask {
 		for i := range c.mapTasks {
 			if c.mapTasks[i].State == InProgress &&
-				now.Sub(c.mapTasks[i].StartTime) > 10*time.Second {
-				c.mapTasks[i].State = Idle
+				now.Sub(c.mapTasks[i].StartTime) > 10*time.Second { //超时控制
+				c.mapTasks[i].State = Idle //Idle 空闲状态
 			}
 		}
 	} else if c.phase == ReduceTask {
@@ -171,6 +170,9 @@ func (c *Coordinator) Done() bool {
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
+// 初始化Coordinator状态
+// 创建Map和Reduce任务
+// 启动RPC服务器
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		nReduce: nReduce,
